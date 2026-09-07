@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🤖 Mi ChatBot</title>
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="chat-header">
+            <div class="header-content">
+                <div class="bot-avatar">🤖</div>
+                <div>
+                    <h1>Mi ChatBot</h1>
+                    <p class="status">🟢 En línea</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button onclick="clearChat()" class="btn-clear" title="Limpiar conversación">
+                    🗑️
+                </button>
+            </div>
+        </div>
+
+        <!-- Área de mensajes -->
+        <div class="chat-messages" id="chatMessages">
+            <div class="message bot">
+                <div class="message-content">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-text">
+                        ¡Hola! Soy tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊
+                    </div>
+                </div>
+                <div class="message-time">Ahora</div>
+            </div>
+        </div>
+        <!-- Área de input -->
+        <div class="chat-input-container">
+            <div class="input-wrapper">
+                <input 
+                    type="text" 
+                    id="messageInput" 
+                    placeholder="Escribe tu mensaje aquí..."
+                    onkeypress="handleKeyPress(event)"
+                    autofocus
+                >
+                <button onclick="sendMessage()" class="btn-send" id="sendButton">
+                    <span class="send-icon">➤</span>
+                </button>
+            </div>
+            <div class="input-footer">
+                <span class="hint">Presiona Enter para enviar</span>
+                <span class="status-dot">🟢</span>
+            </div>
+        </div>
+    </div>
+    <script src="static/script.js"></script>
+</body>
+</html>
