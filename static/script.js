@@ -53,7 +53,7 @@ async function sendMessage() {
     }
 }
 
-// ✅ Función actualizada para mostrar fuente
+// ✅ Función actualizada con renderizado de Markdown (marked.js)
 function addMessage(text, sender, fuente) {
     const messagesContainer = document.getElementById('chatMessages');
     const messageDiv = document.createElement('div');
@@ -63,9 +63,18 @@ function addMessage(text, sender, fuente) {
     const timeString = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
     const avatar = sender === 'user' ? '👤' : '🤖';
     
+    // Renderizado según el tipo de remitente
+    let contentHtml = '';
+    if (sender === 'bot') {
+        // Usa marked si está disponible; de lo contrario, aplica saltos de línea legibles
+        contentHtml = (typeof marked !== 'undefined') ? marked.parse(text) : escapeHtml(text).replace(/\n/g, '<br>');
+    } else {
+        contentHtml = escapeHtml(text);
+    }
+
     let fuenteHtml = '';
     if (fuente && sender === 'bot') {
-        fuenteHtml = `<div style="font-size: 10px; color: #6c757d; margin-top: 2px; padding-left: 52px;">
+        fuenteHtml = `<div style="font-size: 10px; color: #6c757d; margin-top: 4px; padding-left: 52px;">
             📍 Fuente: ${fuente}
         </div>`;
     }
@@ -73,7 +82,7 @@ function addMessage(text, sender, fuente) {
     messageDiv.innerHTML = `
         <div class="message-content">
             <div class="message-avatar">${avatar}</div>
-            <div class="message-text">${escapeHtml(text)}</div>
+            <div class="message-text">${contentHtml}</div>
         </div>
         <div class="message-time">${timeString}</div>
         ${fuenteHtml}

@@ -4,6 +4,30 @@
     box-sizing: border-box;
 }
 
+/* Formateo para contenido renderizado por Marked.js */
+.message-text ul,
+.message-text ol {
+    margin: 8px 0 8px 20px;
+    padding-left: 10px;
+}
+
+.message-text li {
+    margin-bottom: 4px;
+}
+
+.message-text p {
+    margin: 0 0 8px 0;
+}
+
+.message-text p:last-child {
+    margin-bottom: 0;
+}
+
+.message-text strong {
+    color: #0d6efd;
+    /* Color de resaltado para las negritas */
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -51,8 +75,15 @@ body {
 }
 
 @keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.1); }
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
 }
 
 .chat-header h1 {
@@ -109,6 +140,7 @@ body {
         opacity: 0;
         transform: translateY(10px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
@@ -296,29 +328,29 @@ body {
     body {
         padding: 10px;
     }
-    
+
     .container {
         height: 95vh;
         max-height: none;
         border-radius: 15px;
     }
-    
+
     .chat-header {
         padding: 15px 20px;
     }
-    
+
     .chat-header h1 {
         font-size: 20px;
     }
-    
+
     .chat-messages {
         padding: 15px 20px;
     }
-    
+
     .chat-input-container {
         padding: 15px 20px;
     }
-    
+
     .message-text {
         max-width: 85%;
     }
@@ -343,11 +375,27 @@ body {
     animation: typingBounce 1.4s infinite ease-in-out;
 }
 
-.typing-dot:nth-child(1) { animation-delay: 0s; }
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+.typing-dot:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.typing-dot:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+    animation-delay: 0.4s;
+}
 
 @keyframes typingBounce {
-    0%, 60%, 100% { transform: translateY(0); }
-    30% { transform: translateY(-8px); }
+
+    0%,
+    60%,
+    100% {
+        transform: translateY(0);
+    }
+
+    30% {
+        transform: translateY(-8px);
+    }
 }
