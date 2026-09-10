@@ -1,60 +1,52 @@
-import scrapy
-from scrapy.spiders import CrawlSpider, Rule
-from scrapy.linkextractors import LinkExtractor
+import json
 
-class SitioPhpSpider(CrawlSpider):
-    name = "ucss_data_chatboot"
+def leer_json_arreglado(nombre_archivo):
+    datos = []
+    try:
+        with open(nombre_archivo, "r", encoding="utf-8") as f:
+            contenido = f.read().strip()
+        
+        # Intento 1: Leer todo como lista JSON directamente
+        try:
+            datos = json.loads(contenido)
+            print(f"✅ Carga directa exitosa: {len(datos)} elementos en '{nombre_archivo}'")
+            return datos
+        except Exception:
+            pass
 
-    # Dominio base limpio (sin https:// ni slashes)
-    allowed_domains = ["ucss.edu.pe", "www.ucss.edu.pe"]
-    start_urls = ["https://www.ucss.edu.pe/"]
+        # Intento 2: Procesar elemento por elemento
+        lineas = contenido.splitlines()
+        for linea in lineas:
+            linea_limpia = linea.strip().rstrip(",")
+            # Saltar solo los corchetes iniciales o finales
+            if linea_limpia in ["[", "]", "[],", ""]:
+                continue
+            try:
+                objeto = json.loads(linea_limpia)
+                datos.append(objeto)
+            except Exception:
+                continue
 
-    # Regla de extracción ignorando archivos multimedia y documentos pesados
-    rules = (
-        Rule(
-            LinkExtractor(
-                deny_extensions=[
-                    # Documentos y comprimidos
-                    'pdf', 'docx', 'doc', 'xlsx', 'xls', 'ppt', 'pptx',
-                    'zip', 'rar', 'gz', 'tar', '7z',
-                    # Imágenes y multimedia
-                    'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp',
-                    'mp4', 'mp3', 'avi', 'mov', 'flv',
-                    # Archivos de estilo y ejecutables
-                    'css', 'js', 'exe', 'dmg'
-                ]
-            ),
-            callback="parse_page",
-            follow=True
-        ),
-    )
+        print(f"✅ Carga por líneas exitosa: {len(datos)} elementos recuperados de '{nombre_archivo}'")
 
-    custom_settings = {
-        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "DOWNLOAD_DELAY": 0.2,                 # Pausa breve para rapidez
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 16,  # Solicitudes en paralelo
-        "COOKIES_ENABLED": False,              # Ahorro de memoria
-        "RETRY_TIMES": 1,                      # Omitir enlaces rotos rápidos
-    }
+    except FileNotFoundError:
+        print(f"⚠️ El archivo '{nombre_archivo}' no existe.")
+    except Exception as e:
+        print(f"❌ Error al procesar '{nombre_archivo}': {e}")
 
-    def parse_page(self, response):
-        # Filtrar para asegurarse de procesar solo páginas web HTML
-        content_type = response.headers.get("Content-Type", b"").decode("utf-8").lower()
-        if "text/html" not in content_type:
-            return
+    return datos
 
-        # Extracción y limpieza de párrafos de texto
-        parrafos = response.css("p::text, li::text").getall()
-        texto_limpio = " ".join([p.strip() for p in parrafos if p.strip()])
+# 1. Cargar ambas bases de datos
+html_data = leer_json_arreglado("ucss_data.json")
+pdf_data = leer_json_arreglado("ucss_pdf_data.json")
 
-        # Extracción de encabezados
-        encabezados_raw = response.css("h1::text, h2::text, h3::text").getall()
-        encabezados = [h.strip() for h in encabezados_raw if h.strip()]
+# 2. Combinar los arreglos
+base_completa = html_data + pdf_data
 
-        # Retornar únicamente información de texto
-        yield {
-            "url": response.url,
-            "titulo": response.css("title::text").get(default="").strip(),
-            "encabezados": encabezados,
-            "contenido_texto": texto_limpio,
-        }
+# 3. Guardar en un JSON limpio y bien formateado
+if base_completa:
+    with open("ucss_completo.json", "w", encoding="utf-8") as f:
+        json.dump(base_completa, f, ensure_ascii=False, indent=2)
+    print(f"\n🎉 ¡Proceso completado! Se creó 'ucss_completo.json' con {len(base_completa)} registros en total.")
+else:
+    print("\n❌ No se encontraron datos para guardar.")

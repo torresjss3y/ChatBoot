@@ -14,19 +14,16 @@ load_dotenv()
 
 app = FastAPI(title="Mi ChatBot API - UCSS")
 
-# Configuración del cliente de Gemini - Usando la API correcta
-genai.configure(api_key=os.getenv("GEMINI_API_KEY2"))
+API_KEY = os.getenv("GEMINI_API_KEY1")
+if not API_KEY:
+    raise RuntimeError("❌ Falta GEMINI_API_KEY en el entorno (.env)")
 
-# Modelos Gemini disponibles actualmente
-# Basado en los mensajes de error, gemini-3.6-flash es el recomendado
+genai.configure(api_key=API_KEY)
+
 MODELOS_GEMINI = [
-    "gemini-3.6-flash",      # Recomendado por los mensajes de error
-    "gemini-2.5-flash",      # Alternativa
-    "gemini-2.0-flash",      # Alternativa
-    "gemini-1.5-flash",      # Alternativa
+    "models/gemini-3.6-flash",
 ]
 
-# Servir archivos estáticos
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 class ChatRequest(BaseModel):
@@ -37,12 +34,8 @@ class ChatResponse(BaseModel):
     fuente: str
     timestamp: str
 
-# ============================================
-# CARGAR INFORMACIÓN DEL SCRAPING (23,000+ PÁGINAS)
-# ============================================
 def cargar_info_scraping():
-    # Intenta cargar desde la raíz o desde la carpeta scraper
-    rutas = ['ucss_data.json', 'scraper/ucss_data.json']
+    rutas = ['ucss_completo.json', 'scraper/ucss_completo.json']
     for ruta in rutas:
         if os.path.exists(ruta):
             try:
@@ -57,22 +50,51 @@ def cargar_info_scraping():
 
 DATOS_SCRAPING = cargar_info_scraping()
 
-def buscar_contexto_local(consulta: str, top_k: int = 6) -> str:
-    """Buscador optimizado con filtro de relevancia y penalización de páginas genéricas."""
+def corregir_tipeo(texto: str) -> str:
+    """Corrige errores de tipeo comunes manteniendo la consulta natural."""
+    reemplazos = {
+        r'\binfenier\w*': 'ingenieria',
+        r'\bfacutl\w*': 'facultad',
+        r'\bcarrer\w*': 'carrera',
+        r'\badmis\w*': 'admision',
+        r'\bpensio\w*': 'pension',
+        r'\brequisi\w*': 'requisito',
+        r'\bmatricu\w*': 'matricula',
+        r'\bbibliot\w*': 'biblioteca'
+    }
+    for patron, reemplazo in reemplazos.items():
+        texto = re.sub(patron, reemplazo, texto)
+    return texto
+
+def buscar_contexto_local(consulta: str, top_k: int = 12) -> str:
+    """
+    Buscador de contexto equilibrado y adaptativo para TODAS las consultas de la UCSS.
+    """
     if not DATOS_SCRAPING:
         return "No hay información web local disponible."
 
-    # Palabras irrelevantes que ensucian la puntuación
-    stopwords = {'como', 'para', 'donde', 'que', 'los', 'las', 'del', 'con', 'una', 'uno', 'sobre', 'dame', 'informacion', 'ucss'}
-    palabras_consulta = [p.lower() for p in consulta.split() if len(p) > 2 and p.lower() not in stopwords]
+    # 1. Normalización y corrección ortográfica
+    consulta_limpia = corregir_tipeo(consulta.lower())
+    
+    # Palabras vacías sin valor semántico
+    stopwords = {'como', 'para', 'donde', 'que', 'los', 'las', 'del', 'con', 'una', 'uno', 'sobre', 'dame', 'informacion', 'ucss', 'dime', 'cuales', 'son', 'acerca', 'todas', 'todos'}
+    palabras_clave = [p for p in consulta_limpia.split() if len(p) > 2 and p not in stopwords]
 
-    if not palabras_consulta:
-        palabras_consulta = [p.lower() for p in consulta.split() if len(p) > 2]
-
-    # Palabras clave genéricas que suelen devolver respuestas vagas
-    urls_genericas_a_penalizar = ['/noticias', '/evento', '/bienvenida', '/contacto', '/nosotros', '/galeria']
+    if not palabras_clave:
+        palabras_clave = [p for p in consulta_limpia.split() if len(p) > 2]
 
     coincidencias = []
+    urls_vistas = set()
+
+    # 2. Detección dinámica de intenciones generales
+    intenciones = {
+        'carreras': any(k in consulta_limpia for k in ['carrera', 'carreras', 'facultad', 'escuela', 'pregrado', 'posgrado', 'maestria', 'malla', 'estudiar']),
+        'admision': any(k in consulta_limpia for k in ['admision', 'ingreso', 'postular', 'requisito', 'modalidad', 'examen', 'cronograma']),
+        'costos': any(k in consulta_limpia for k in ['costo', 'pension', 'precio', 'cuota', 'pago', 'descuento', 'beca', 'escalafón', 'categoria']),
+        'tramites': any(k in consulta_limpia for k in ['tramite', 'constancia', 'certificado', 'carnet', 'retiro', 'traslado', 'convalidación', 'titulo', 'bachiller']),
+        'servicios': any(k in consulta_limpia for k in ['biblioteca', 'bienestar', 'psicologia', 'bolsa', 'empleo', 'internacional', 'deporte', 'salud']),
+        'sedes': any(k in consulta_limpia for k in ['sede', 'sedes', 'filial', 'ubicacion', 'direccion', 'telefono', 'contacto', 'olivos', 'tarma', 'chulucanas', 'huacho', 'atalaya', 'nueva cajamarca'])
+    }
 
     for item in DATOS_SCRAPING:
         if not isinstance(item, dict):
@@ -82,34 +104,53 @@ def buscar_contexto_local(consulta: str, top_k: int = 6) -> str:
         texto = item.get("contenido_texto", "").lower()
         url = item.get("url", "").lower()
 
-        # Descartar páginas de sistema/desuso
-        if any(p in url for p in ['login', 'recuperar', 'cgi-sys', 'wp-admin', 'cart']):
+        # Desduplicar páginas por URL base
+        url_base = url.split('?')[0].rstrip('/').replace('/index.php', '')
+        if url_base in urls_vistas:
+            continue
+
+        # Filtrar páginas del sistema no útiles
+        if any(p in url for p in ['login', 'recuperar', 'cgi-sys', 'wp-admin', 'cart', 'checkout']):
             continue
 
         score = 0
 
-        # Evaluar coincidencia de frase exacta
-        if consulta.lower() in texto:
-            score += 15
-
-        for palabra in palabras_consulta:
+        # 3. Puntuación por coincidencia de palabras clave exactas
+        for palabra in palabras_clave:
             if palabra in titulo:
-                score += 8  # Mayor peso al título específico
+                score += 20  # Gran peso si la palabra clave está en el título
             if palabra in url:
-                score += 4
-            # Ocurrencias en el texto
+                score += 10
+            
             conteo = texto.count(palabra)
             if conteo > 0:
-                score += min(conteo, 5)  # Tope para evitar que páginas largas con relleno ganen siempre
+                score += min(conteo * 2, 10) # Peso por frecuencia de palabra en el contenido
 
-        # Penalizar páginas muy genéricas si no coinciden exactamente
-        if any(penal in url for penal in urls_genericas_a_penalizar):
-            score -= 5
+        # 4. Boost Inteligente según la intención del usuario
+        if intenciones['carreras'] and any(k in url or k in titulo for k in ['carrera', 'facultad', 'escuela', 'pregrado', 'posgrado', 'oferta-academica']):
+            score += 25
 
+        if intenciones['admision'] and any(k in url or k in titulo for k in ['admision', 'modalidad', 'requisito', 'postula']):
+            score += 25
+
+        if intenciones['costos'] and any(k in url or k in titulo for k in ['pension', 'costo', 'beca', 'pago', 'beneficio']):
+            score += 25
+
+        if intenciones['tramites'] and any(k in url or k in titulo for k in ['tramite', 'secretaria', 'guia', 'requisito']):
+            score += 25
+
+        if intenciones['servicios'] and any(k in url or k in titulo for k in ['biblioteca', 'bienestar', 'empleabilidad', 'servicio']):
+            score += 25
+
+        if intenciones['sedes'] and any(k in url or k in titulo for k in ['sede', 'filial', 'contacto', 'nosotros']):
+            score += 25
+
+        # 5. Guardar el documento si obtuvo puntuación válida
         if score > 0:
+            urls_vistas.add(url_base)
             coincidencias.append((score, item))
 
-    # Ordenar por puntaje
+    # Ordenar por relevancia descendente y extraer los mejores resultados
     coincidencias.sort(key=lambda x: x[0], reverse=True)
     mejores = coincidencias[:top_k]
 
@@ -118,308 +159,67 @@ def buscar_contexto_local(consulta: str, top_k: int = 6) -> str:
 
     contexto = []
     for _, doc in mejores:
-        # Aumentamos a 2,500 caracteres para entregar la información completa a Gemini
-        contexto.append(f"📌 **PÁGINA: {doc.get('titulo', 'UCSS')}**\nURL: {doc.get('url')}\n{doc.get('contenido_texto', '')[:2500]}")
+        contexto.append(f"📌 **PÁGINA: {doc.get('titulo', 'UCSS')}**\nURL: {doc.get('url')}\n{doc.get('contenido_texto', '')[:3000]}")
 
     return "\n\n".join(contexto)
 
 INFORMACION_BASE = """
 UNIVERSIDAD CATÓLICA SEDES SAPIENTIAE (UCSS)
 - Fundación: 1999
-- Campus principal: Carretera Central Km. 23.6, Ñaña, Lima
-- Contacto: (01) 477-6900 | informes@ucss.edu.pe
+- Campus principal: Esquina Constelaciones y Sol de Oro s/n, Urb. Sol de Oro, Los Olivos, Lima - Perú
+- Central Telefónica: (01) 604-5000 | informes@ucss.edu.pe
 - Sitio web: https://www.ucss.edu.pe
 """
-
 PROMPT_SISTEMA = """
 Eres el asistente virtual oficial de la Universidad Católica Sedes Sapientiae (UCSS).
-Tu función principal es BRINDAR RESPUESTAS CONCRETAS, COMPLETAS, CLARAS Y ÚTILES sobre la universidad, utilizando EXCLUSIVAMENTE la información disponible en el contexto extraído de las páginas oficiales de la UCSS.
-Tu objetivo NO es decirle al usuario que visite la página web para buscar la respuesta.
-Tu objetivo es LEER, ANALIZAR, RELACIONAR Y EXTRAER la información disponible para RESPONDER DIRECTAMENTE la duda del usuario.
+Tu objetivo es brindar respuestas claras, completas y de máxima utilidad al usuario sobre carreras, mallas curriculares, graduación, trámites y servicios.
+
 ==================================================
-CONTEXTO OFICIAL EXTRAÍDO DE LA UCSS
+CONTEXTO EXTRAÍDO DE LA UCSS
 ==================================================
 {contexto_web}
+
 ==================================================
 PREGUNTA DEL USUARIO
 ==================================================
 {pregunta}
+
 ==================================================
-REGLAS OBLIGATORIAS DE RESPUESTA
+INSTRUCCIONES DE RESPUESTA
 ==================================================
-1. RESPONDE DIRECTAMENTE LA PREGUNTA
-No respondas con frases generales como:
-- "Puedes consultar nuestra página web."
-- "Para más información visita la página oficial."
-- "La universidad ofrece diferentes programas."
-- "Te recomendamos comunicarte con la universidad."
-- "Puedes revisar los requisitos en la página web."
-Si la información necesaria aparece en el contexto, DEBES proporcionar esa información directamente.
-El usuario está consultando al chatbot precisamente para resolver su duda, por lo que debes intentar resolverla con la información disponible.
---------------------------------------------------
-2. UTILIZA TODA LA INFORMACIÓN RELEVANTE DEL CONTEXTO
-Antes de responder, analiza todo el contexto proporcionado y selecciona TODA la información relacionada con la pregunta.
-No te limites a utilizar únicamente el primer fragmento encontrado.
-Si existen varios fragmentos que complementan la respuesta, intégralos en una sola respuesta coherente.
-Por ejemplo, si el usuario pregunta por una carrera, y el contexto contiene:
-- Nombre de la carrera
-- Modalidad
-- Duración
-- Sede
-- Grado académico
-- Perfil profesional
-- Plan de estudios
-- Requisitos
-- Costos
-- Turnos
-- Contacto
-Debes incluir toda la información relevante disponible, no solamente el nombre de la carrera.
---------------------------------------------------
-3. RESPUESTAS ESPECÍFICAS, NO GENERALES
-Evita respuestas vagas, genéricas o demasiado resumidas.
-Si el contexto contiene un dato concreto, debes mencionarlo.
-Ejemplo:
-INCORRECTO: "La carrera tiene una duración determinada."
-CORRECTO: "La carrera tiene una duración de 10 semestres."
-INCORRECTO: "La universidad cuenta con varias sedes."
-CORRECTO: "La carrera se ofrece en las sedes de Lima y Nueva Cajamarca."
---------------------------------------------------
-4. NO OMITAS DATOS IMPORTANTES
-Cuando estén disponibles en el contexto, incluye explícitamente:
-- Nombre completo del programa o carrera.
-- Facultad o área académica.
-- Sede.
-- Modalidad de estudio.
-- Duración.
-- Grado académico.
-- Título profesional.
-- Requisitos de admisión.
-- Documentos necesarios.
-- Fechas importantes.
-- Fechas de inscripción.
-- Fechas de admisión.
-- Costos.
-- Pensiones.
-- Matrícula.
-- Número de cuotas.
-- Becas o beneficios.
-- Horarios.
-- Turnos.
-- Plan de estudios.
-- Cursos.
-- Perfil del egresado.
-- Campo laboral.
-- Contactos.
-- Correos electrónicos.
-- Teléfonos.
-- Direcciones.
-- Horarios de atención.
-- Cualquier otro dato específico que esté relacionado con la consulta.
-NO inventes información que no aparezca en el contexto.
---------------------------------------------------
-5. SI EL USUARIO HACE UNA PREGUNTA AMPLIA
-Si el usuario pregunta, por ejemplo: "Quiero información sobre Ingeniería de Sistemas"
-No respondas solamente: "Es una carrera de la UCSS."
-Debes presentar toda la información relevante disponible en el contexto sobre Ingeniería de Sistemas, organizada por categorías.
-Por ejemplo:
-**Ingeniería de Sistemas**
-- **Modalidad:** ...
-- **Duración:** ...
-- **Sede:** ...
-- **Grado académico:** ...
-- **Título profesional:** ...
-- **Perfil:** ...
-- **Campo laboral:** ...
-- **Plan de estudios:** ...
-- **Requisitos:** ...
-- **Costos:** ...
-- **Contacto:** ...
-Incluye únicamente las categorías para las cuales exista información en el contexto.
---------------------------------------------------
-6. SI EL USUARIO PIDE COMPARAR INFORMACIÓN
-Si pregunta:
-- "¿Cuál es la diferencia entre X e Y?"
-- "¿Qué carrera me conviene?"
-- "¿Cuál dura menos?"
-- "¿Cuál tiene menor costo?"
-- "¿Qué modalidades existen?"
-Utiliza la información disponible en el contexto para hacer la comparación directamente.
-No obligues al usuario a consultar otras páginas.
-Si algún dato necesario para la comparación no aparece en el contexto, indícalo claramente.
---------------------------------------------------
-7. SI EL USUARIO PREGUNTA POR REQUISITOS
-Debes enumerar TODOS los requisitos que aparezcan en el contexto.
-No respondas simplemente: "Debes cumplir con los requisitos de admisión."
-Debes indicar cuáles son.
-Ejemplo:
-**Requisitos de admisión:**
-- Documento de identidad.
-- Certificado de estudios.
-- Pago por derecho de admisión.
-Solo incluye requisitos realmente presentes en el contexto.
---------------------------------------------------
-8. SI EL USUARIO PREGUNTA POR COSTOS
-Si existen datos sobre costos, muéstralos de manera clara.
-Por ejemplo:
-**Costos:**
-- Matrícula: S/ ...
-- Pensión: S/ ...
-- Número de cuotas: ...
-- Derecho de inscripción: S/ ...
-NO ocultes los valores cuando estén disponibles.
---------------------------------------------------
-9. SI EL USUARIO PREGUNTA POR FECHAS
-Las fechas son información crítica.
-Debes mencionar las fechas completas disponibles en el contexto.
-Por ejemplo:
-**Fechas importantes:**
-- Inicio de inscripciones: ...
-- Cierre de inscripciones: ...
-- Examen de admisión: ...
-- Inicio de clases: ...
-No reemplaces fechas concretas por expresiones como "próximamente" o "en las fechas establecidas".
---------------------------------------------------
-10. SI EL USUARIO PREGUNTA POR UNA PERSONA, OFICINA O CONTACTO
-Si el contexto contiene nombres, cargos, correos, teléfonos o responsables, debes mostrarlos directamente.
-Ejemplo:
-**Contacto:**
-- Responsable: ...
-- Correo: ...
-- Teléfono: ...
-- Horario de atención: ...
---------------------------------------------------
-11. NO DERIVES AL USUARIO A LA PÁGINA WEB SI YA TIENES LA RESPUESTA
-Esta regla es MUY IMPORTANTE.
-Si la información solicitada aparece en {contexto_web}, responde con esa información.
-NO termines automáticamente con: "Para más información visita la página oficial."
-La URL solo debe aparecer cuando:
-a) El usuario solicite expresamente el enlace.
-b) El contexto contenga un enlace que sea realmente necesario para realizar una acción.
-c) La información solicitada NO se encuentre en el contexto.
-Incluso en esos casos, primero proporciona toda la información que sí tengas.
---------------------------------------------------
-12. CUANDO FALTE INFORMACIÓN
-Si el contexto no contiene la respuesta, NO INVENTES.
-Indica claramente: "No encuentro ese dato en la información oficial disponible para esta consulta."
-Si el contexto contiene un correo, teléfono, oficina o URL relacionada con el tema, puedes proporcionarlo como alternativa.
-Pero NO uses esta respuesta si la información sí está disponible en el contexto.
---------------------------------------------------
-13. NO INVENTES NI SUPONGAS
-Está estrictamente prohibido:
-- Inventar precios.
-- Inventar fechas.
-- Inventar requisitos.
-- Inventar carreras.
-- Inventar cursos.
-- Inventar sedes.
-- Inventar teléfonos.
-- Inventar correos.
-- Inventar responsables.
-- Inventar horarios.
-- Inventar modalidades.
-- Completar información mediante suposiciones.
-Si un dato no aparece en el contexto, debes indicarlo.
---------------------------------------------------
-14. MANTÉN EL CONTEXTO DE LA CONVERSACIÓN
-Si el usuario realiza una pregunta de seguimiento, interpreta la pregunta tomando en cuenta la conversación anterior.
-Ejemplo:
-Usuario: "¿Cuánto dura Ingeniería de Sistemas?"
-Chatbot: "La carrera dura 10 semestres."
-Usuario: "¿Y cuánto cuesta?"
-Debes interpretar que "cuánto cuesta" se refiere a Ingeniería de Sistemas.
-No solicites nuevamente información que ya está clara en la conversación.
---------------------------------------------------
-15. FORMATO DE RESPUESTA
-Utiliza una estructura clara y fácil de leer.
-Usa:
-- **Negritas** para títulos y datos importantes.
-- Listas con guiones.
-- Listas numeradas cuando exista un procedimiento o conjunto de pasos.
-- Tablas cuando sea necesario comparar varios datos.
-No escribas párrafos excesivamente largos.
---------------------------------------------------
-16. ADAPTA LA EXTENSIÓN A LA PREGUNTA
-Si la pregunta es específica, responde específicamente.
-Ejemplo: "¿Cuánto dura la carrera?" -> "**Duración:** 10 semestres."
-No es necesario proporcionar información irrelevante.
-Si la pregunta es amplia, proporciona una respuesta amplia y completa utilizando toda la información relevante disponible.
---------------------------------------------------
-17. PRIORIZA LA UTILIDAD PARA EL USUARIO
-Piensa siempre: "¿Qué información necesita el usuario para quedar con su duda resuelta?"
-La respuesta debe intentar resolver la consulta en ESTE MENSAJE.
-No conviertas al chatbot en un simple intermediario hacia la página web.
---------------------------------------------------
-18. RESPUESTA BASADA EN FUENTES OFICIALES
-Toda la información debe proceder del contexto extraído de las páginas oficiales de la UCSS.
-Si existen contradicciones entre fragmentos del contexto:
-- No elijas arbitrariamente.
-- Indica la discrepancia.
-- Prioriza la información que tenga mayor contexto, fecha más reciente o procedencia más clara, si dicha información está disponible.
---------------------------------------------------
-19. REGLA FINAL DE CALIDAD
-ANTES DE RESPONDER, realiza internamente estas comprobaciones:
-1. ¿Entendí exactamente qué está preguntando el usuario?
-2. ¿Busqué la respuesta en TODO el contexto disponible?
-3. ¿Estoy incluyendo todos los datos relevantes encontrados?
-4. ¿Estoy respondiendo directamente en lugar de enviar al usuario a la web?
-5. ¿Estoy evitando información genérica?
-6. ¿Estoy evitando inventar información?
-7. ¿Estoy manteniendo el contexto de la conversación?
-8. ¿La respuesta realmente resuelve la duda del usuario?
-Si la respuesta a las preguntas anteriores es sí, responde.
-==================================================
+1. Revisa detenidamente todo el contexto provisto (incluyendo las secciones de respaldo si existen).
+2. Si el usuario pregunta por la malla curricular o cursos de una carrera (ej. Ingeniería de Sistemas), detalla la estructura por áreas o ciclos según la información encontrada. EVITA responder que "no figura" si hay información de asignaturas o áreas disponible.
+3. Si la pregunta es sobre graduación o titulación, explica los requisitos generales (créditos, tesis, idiomas, prácticas).
+4. Presenta la respuesta con un formato limpio, organizado en viñetas y negritas.
+
 RESPONDE AHORA A LA PREGUNTA DEL USUARIO:
-{pregunta}
 """
 
 def limpiar_respuesta(respuesta):
-    """Limpia excesos de saltos de línea sin destruir la estructura de listas."""
     respuesta = re.sub(r'\n{3,}', '\n\n', respuesta)
     return respuesta.strip()
 
 def generar_respuesta_con_reintentos(prompt, max_intentos=3, espera_inicial=2):
-    """Genera respuesta con reintentos automáticos y backoff exponencial."""
     ultimo_error = None
-    
     for intento in range(max_intentos):
-        for modelo in MODELOS_GEMINI:
+        for modelo_nombre in MODELOS_GEMINI:
             try:
-                print(f"🔄 Intentando con modelo: {modelo} (Intento {intento+1}/{max_intentos})")
-                respuesta = genai_client.models.generate_content(
-                    model=modelo,
-                    contents=prompt
-                )
-                print(f"✅ Éxito con modelo: {modelo}")
+                print(f"🔄 Consultando modelo: {modelo_nombre} (Intento {intento+1}/{max_intentos})")
+                model = genai.GenerativeModel(modelo_nombre)
+                respuesta = model.generate_content(prompt)
+                print(f"✅ Respuesta generada con éxito por: {modelo_nombre}")
                 return respuesta.text
-                
             except Exception as e:
                 error_msg = str(e)
-                print(f"⚠️ Error con {modelo}: {error_msg}")
-                
-                # Si es error de disponibilidad (503), esperar y continuar
-                if "503" in error_msg or "UNAVAILABLE" in error_msg:
-                    tiempo_espera = espera_inicial * (2 ** intento)
-                    print(f"⏳ Modelo no disponible. Esperando {tiempo_espera}s...")
-                    time.sleep(tiempo_espera)
-                    continue
-                # Si es error de modelo no encontrado (404), intentar con otro
-                elif "404" in error_msg or "NOT_FOUND" in error_msg:
-                    continue
-                # Otros errores
-                else:
-                    ultimo_error = e
-                    continue
-        
-        # Si llegamos aquí, todos los modelos fallaron en este intento
-        if intento < max_intentos - 1:
-            print(f"⏳ Todos los modelos fallaron. Reintentando en {espera_inicial * (2 ** intento)}s...")
-            time.sleep(espera_inicial * (2 ** intento))
+                print(f"⚠️ Error en {modelo_nombre}: {error_msg}")
+                ultimo_error = e
+                time.sleep(espera_inicial)
+                continue
     
-    # Si todos los intentos fallaron
     if ultimo_error:
         raise ultimo_error
     else:
-        raise Exception("Todos los modelos fallaron después de múltiples reintentos")
+        raise Exception("Ocurrió un problema con los modelos de IA.")
 
 @app.get("/")
 async def root():
@@ -430,16 +230,14 @@ async def chat(request: ChatRequest):
     try:
         mensaje = request.mensaje
         
-        # Búsqueda semántica/clave en las 23,000 páginas
-        contexto_web = buscar_contexto_local(mensaje)
-
+        # Búsqueda adaptativa de contexto
+        contexto_web = buscar_contexto_local(mensaje, top_k=12)
+        
         prompt_completo = PROMPT_SISTEMA.format(
-            info_base=INFORMACION_BASE,
             contexto_web=contexto_web,
             pregunta=mensaje
         )
         
-        # Generar respuesta con reintentos automáticos
         respuesta_text = generar_respuesta_con_reintentos(
             prompt=prompt_completo,
             max_intentos=3,
@@ -453,11 +251,10 @@ async def chat(request: ChatRequest):
         )
         
     except Exception as e:
-        print(f"❌ Error en /chat: {e}")
-        # Devolver un mensaje más amigable al usuario
+        print(f"❌ Error en endpoint /chat: {e}")
         raise HTTPException(
             status_code=503,
-            detail="El servicio de IA está temporalmente ocupado. Por favor, intenta nuevamente en unos segundos."
+            detail="Servicio temporalmente ocupado. Por favor reintenta en unos segundos."
         )
 
 @app.get("/status")
